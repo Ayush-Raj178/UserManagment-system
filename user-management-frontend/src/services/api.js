@@ -1,9 +1,10 @@
 import axios from 'axios';
 
-// Create axios instance with base URL from environment variables
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
-  timeout: 10000, // 10 seconds
+  baseURL: API_BASE_URL,
+  timeout: 10000, // 10 seconds timeout
   headers: {
     'Content-Type': 'application/json',
   },
@@ -12,243 +13,112 @@ const api = axios.create({
 // Request interceptor to add JWT token
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('authToken');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
   (error) => {
-    return Promise.reject({
-      message: 'Error preparing request',
-      originalError: error
-    });
+    console.error('Request interceptor error:', error);
+    return Promise.reject(error);
   }
 );
 
-// Response interceptor to handle 401 errors and other responses
+// Response interceptor to handle 401 errors and network issues
 api.interceptors.response.use(
   (response) => {
-    return response.data;
+    // Return the response data directly for successful requests
+    return response;
   },
-  async (error) => {
-    const originalRequest = error.config;
-
-    // Handle 401 Unauthorized error
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      originalRequest._retry = true;
-
-      try {
-        const refreshToken = localStorage.getItem('refreshToken');
-        
-        if (refreshToken) {
-          try {
-            // Try to refresh the token
-            const response = await api.post(endpoints.auth.refreshToken, {
-              refreshToken
-            });
-            
-            if (response.token) {
-              localStorage.setItem('token', response.token);
-              if (response.refreshToken) {
-                localStorage.setItem('refreshToken', response.refreshToken);
-              }
-              
-              // Retry the original request with new token
-              originalRequest.headers.Authorization = `Bearer ${response.token}`;
-              return api(originalRequest);
-            }
-          } catch (refreshError) {
-            console.warn('Token refresh failed:', refreshError);
-          }
-        }
-
-        // If refresh failed or no refresh token, clear auth data and redirect
-        localStorage.removeItem('token');
-        localStorage.removeItem('refreshToken');
-        localStorage.removeItem('user');
-        window.location.href = '/login';
-        
-        return Promise.reject({
-          message: 'Session expired. Please login again.',
-          status: 401,
-          originalError: error
-        });
-      } catch (refreshError) {
-        return Promise.reject({
-          message: 'Authentication refresh failed',
-          status: 401,
-          originalError: refreshError
-        });
-      }
-    }
-
-    // Handle network errors
-    if (!error.response) {
+  (error) => {
+    // Handle different types of errors
+    if (error.code === 'ECONNABORTED') {
+      // Timeout error
+      console.error('Request timeout');
       return Promise.reject({
-        message: 'Network Error: Please check your internet connection',
-        isNetworkError: true,
+        message: 'Request timeout. Please check your internet connection.',
+        type: 'TIMEOUT_ERROR',
         originalError: error
       });
     }
-
-    // Handle specific HTTP status codes
-    switch (error.response.status) {
-      case 400:
-        return Promise.reject({
-          message: error.response.data.message || 'Invalid request',
-          status: 400,
-          originalError: error
-        });
-      
-      case 403:
-        return Promise.reject({
-          message: 'You do not have permission to perform this action',
-          status: 403,
-          originalError: error
-        });
-      
-      case 404:
-        return Promise.reject({
-          message: 'Requested resource not found',
-          status: 404,
-          originalError: error
-        });
-      
-      case 422:
-        return Promise.reject({
-          message: error.response.data.message || 'Validation failed',
-          status: 422,
-          validationErrors: error.response.data.errors,
-          originalError: error
-        });
-      
-      case 429:
-        return Promise.reject({
-          message: 'Too many requests. Please try again later.',
-          status: 429,
-          originalError: error
-        });
-      
-      case 500:
-        return Promise.reject({
-          message: 'Internal server error. Please try again later.',
-          status: 500,
-          originalError: error
-        });
-      
-      default:
-        return Promise.reject({
-          message: error.response?.data?.message || 'An unexpected error occurred',
-          status: error.response?.status,
-          originalError: error
-        });
+    
+    if (!error.response) {
+      // Network error (no response from server)
+      console.error('Network error:', error.message);
+      return Promise.reject({
+        message: 'Network error. Please check your internet connection.',
+        type: 'NETWORK_ERROR',
+        originalError: error
+      });
     }
+    
+    // Server responded with error status
+    const { status, data } = error.response;
+    
+    switch (status) {
+      case 401:
+        // Unauthorized - token expired or invalid
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('user');
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+        break;
+      case 403:
+        // Forbidden - insufficient permissions
+        console.error('Access forbidden');
+        break;
+      case 404:
+        // Not found
+        console.error('Resource not found');
+        break;
+      case 422:
+        // Validation error
+        console.error('Validation error:', data);
+        break;
+      case 500:
+        // Server error
+        console.error('Internal server error');
+        break;
+      default:
+        console.error(`HTTP Error ${status}:`, data);
+    }
+    
+    // Format error response
+    const errorResponse = {
+      message: data?.message || error.message || 'An unexpected error occurred',
+      status: status,
+      errors: data?.errors || null,
+      type: 'API_ERROR',
+      originalError: error
+    };
+    
+    return Promise.reject(errorResponse);
   }
 );
 
-// API endpoints
-export const endpoints = {
-  auth: {
-    login: '/auth/login',
-    register: '/auth/register',
-    logout: '/auth/logout',
-    forgotPassword: '/auth/forgot-password',
-    validateResetToken: (token) => `/auth/reset-password/validate/${token}`,
-    resetPassword: '/auth/reset-password'
-  },
-  users: {
-    list: '/users',
-    getById: (id) => `/users/${id}`,
-    create: '/users',
-    update: (id) => `/users/${id}`,
-    delete: (id) => `/users/${id}`,
-    profile: '/users/profile',
-    password: '/users/password'
-  },
-  admin: {
-    statistics: '/admin/statistics/users',
-    activities: '/admin/activities'
+// Helper function to handle API responses
+export const handleApiResponse = (response) => {
+  if (response.data) {
+    return {
+      success: true,
+      data: response.data,
+      message: response.data.message || 'Operation completed successfully'
+    };
   }
+  return response;
 };
 
-// Helper functions for common API operations
-export const apiHelpers = {
-  /**
-   * Generic GET request
-   * @param {string} url - The endpoint URL
-   * @param {Object} params - Query parameters
-   */
-  get: async (url, params = {}) => {
-    try {
-      return await api.get(url, { params });
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  /**
-   * Generic POST request
-   * @param {string} url - The endpoint URL
-   * @param {Object} data - Request body
-   * @param {Object} config - Additional axios config
-   */
-  post: async (url, data = {}, config = {}) => {
-    try {
-      return await api.post(url, data, config);
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  /**
-   * Generic PUT request
-   * @param {string} url - The endpoint URL
-   * @param {Object} data - Request body
-   * @param {Object} config - Additional axios config
-   */
-  put: async (url, data = {}, config = {}) => {
-    try {
-      return await api.put(url, data, config);
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  /**
-   * Generic DELETE request
-   * @param {string} url - The endpoint URL
-   * @param {Object} config - Additional axios config
-   */
-  delete: async (url, config = {}) => {
-    try {
-      return await api.delete(url, config);
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  /**
-   * Upload file(s)
-   * @param {string} url - The endpoint URL
-   * @param {FormData} formData - Form data with files
-   * @param {Function} onProgress - Progress callback
-   */
-  upload: async (url, formData, onProgress = null) => {
-    try {
-      return await api.post(url, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        },
-        onUploadProgress: onProgress ? (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          onProgress(percentCompleted);
-        } : undefined
-      });
-    } catch (error) {
-      throw error;
-    }
-  }
+// Helper function to handle API errors
+export const handleApiError = (error) => {
+  console.error('API Error:', error);
+  return {
+    success: false,
+    message: error.message || 'An unexpected error occurred',
+    errors: error.errors || null,
+    status: error.status || null
+  };
 };
 
-export default api; 
+export default api;

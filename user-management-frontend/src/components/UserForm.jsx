@@ -1,200 +1,303 @@
-import { useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
-import { yupResolver } from '@hookform/resolvers/yup';
-import * as yup from 'yup';
-import { useNavigate, useParams } from 'react-router-dom';
-import { createUser, updateUser, getUserById } from '../services/userService';
+import { useAuth } from '../hooks/useAuth';
+import { adminService } from '../services';
 
-const schema = yup.object().shape({
-  firstName: yup
-    .string()
-    .required('First name is required')
-    .min(2, 'First name must be at least 2 characters'),
-  lastName: yup
-    .string()
-    .required('Last name is required')
-    .min(2, 'Last name must be at least 2 characters'),
-  email: yup
-    .string()
-    .email('Please enter a valid email')
-    .required('Email is required'),
-  role: yup
-    .string()
-    .required('Role is required')
-    .oneOf(['user', 'admin'], 'Invalid role'),
-  password: yup
-    .string()
-    .when('isNew', {
-      is: true,
-      then: yup
-        .string()
-        .required('Password is required')
-        .min(8, 'Password must be at least 8 characters')
-        .matches(
-          /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/,
-          'Password must contain at least one uppercase letter, one lowercase letter, one number and one special character'
-        ),
-    }),
-});
-
-export const UserForm = () => {
-  const { id } = useParams();
-  const navigate = useNavigate();
-  const isNew = !id;
+const UserForm = ({ userId, isOpen, onClose, onSuccess }) => {
+  const { isAdmin } = useAuth();
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isSubmitting },
+    setError,
+    clearErrors,
     reset,
     setValue,
   } = useForm({
-    resolver: yupResolver(schema),
-    context: { isNew },
+    defaultValues: {
+      firstName: '',
+      lastName: '',
+      email: '',
+      role: 'user',
+      isActive: true,
+    },
   });
 
   useEffect(() => {
-    if (!isNew) {
-      const fetchUser = async () => {
-        try {
-          const userData = await getUserById(id);
-          reset({
-            firstName: userData.firstName,
-            lastName: userData.lastName,
-            email: userData.email,
-            role: userData.role,
-          });
-        } catch (err) {
-          console.error('Failed to fetch user:', err);
-          navigate('/users');
-        }
-      };
+    if (userId) {
+      setIsEditMode(true);
       fetchUser();
+    } else {
+      setIsEditMode(false);
+      reset({
+        firstName: '',
+        lastName: '',
+        email: '',
+        role: 'user',
+        isActive: true,
+      });
     }
-  }, [id, isNew, reset, navigate]);
+  }, [userId, reset]);
 
-  const onSubmit = async (data) => {
+  const fetchUser = async () => {
     try {
-      if (isNew) {
-        await createUser(data);
+      setLoading(true);
+      const result = await adminService.getUserById(userId);
+      if (result.success) {
+        const userData = result.data;
+        setValue('firstName', userData.firstName);
+        setValue('lastName', userData.lastName);
+        setValue('email', userData.email);
+        setValue('role', userData.role);
+        setValue('isActive', userData.isActive);
       } else {
-        await updateUser(id, data);
+        alert('Failed to load user data');
       }
-      navigate('/users');
-    } catch (err) {
-      console.error('Failed to save user:', err);
+    } catch (error) {
+      console.error('Error fetching user:', error);
+      alert('Error loading user data');
+    } finally {
+      setLoading(false);
     }
   };
 
+  const onSubmit = async (data) => {
+    try {
+      clearErrors();
+      let result;
+
+      if (isEditMode) {
+        result = await adminService.updateUser(userId, data);
+      } else {
+        result = await adminService.createUser(data);
+      }
+
+      if (result.success) {
+        onSuccess && onSuccess();
+        onClose();
+        alert(`User ${isEditMode ? 'updated' : 'created'} successfully`);
+      } else {
+        if (result.errors) {
+          Object.keys(result.errors).forEach((field) => {
+            setError(field, {
+              type: 'server',
+              message: result.errors[field],
+            });
+          });
+        } else {
+          alert(`Failed to ${isEditMode ? 'update' : 'create'} user: ${result.message}`);
+        }
+      }
+    } catch (error) {
+      console.error(`User ${isEditMode ? 'update' : 'creation'} error:`, error);
+      alert(`An error occurred while ${isEditMode ? 'updating' : 'creating'} the user`);
+    }
+  };
+
+  if (!isOpen || !isAdmin()) {
+    return null;
+  }
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div className="py-6">
-        <h1 className="text-2xl font-semibold text-gray-900">
-          {isNew ? 'Create User' : 'Edit User'}
-        </h1>
+    <div className="fixed inset-0 z-10 overflow-y-auto">
+      <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div className="fixed inset-0 transition-opacity" aria-hidden="true">
+          <div className="absolute inset-0 bg-gray-500 opacity-75" onClick={onClose}></div>
+        </div>
 
-        <div className="mt-6 bg-white shadow px-4 py-5 sm:rounded-lg sm:p-6">
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-            <div className="grid grid-cols-6 gap-6">
-              {/* First Name */}
-              <div className="col-span-6 sm:col-span-3">
-                <label htmlFor="firstName" className="block text-sm font-medium text-gray-700">
-                  First name
-                </label>
-                <input
-                  type="text"
-                  {...register('firstName')}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                />
-                {errors.firstName && (
-                  <p className="mt-1 text-sm text-red-600">{errors.firstName.message}</p>
+        <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
+          &#8203;
+        </span>
+
+        <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+          <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+            <div className="sm:flex sm:items-start">
+              <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
+                  {isEditMode ? 'Edit User' : 'Create New User'}
+                </h3>
+                
+                {loading ? (
+                  <div className="flex justify-center items-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                  </div>
+                ) : (
+                  <form onSubmit={handleSubmit(onSubmit)} className="mt-4 space-y-4">
+                    {/* First Name */}
+                    <div>
+                      <label htmlFor="firstName" className="block text-sm font-medium text-gray-700">
+                        First Name
+                      </label>
+                      <input
+                        {...register('firstName', {
+                          required: 'First name is required',
+                          minLength: {
+                            value: 2,
+                            message: 'First name must be at least 2 characters',
+                          },
+                        })}
+                        type="text"
+                        className={`mt-1 block w-full border rounded-md px-3 py-2 shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm ${
+                          errors.firstName ? 'border-red-300' : 'border-gray-300'
+                        }`}
+                        placeholder="Enter first name"
+                      />
+                      {errors.firstName && (
+                        <p className="mt-1 text-sm text-red-600">{errors.firstName.message}</p>
+                      )}
+                    </div>
+
+                    {/* Last Name */}
+                    <div>
+                      <label htmlFor="lastName" className="block text-sm font-medium text-gray-700">
+                        Last Name
+                      </label>
+                      <input
+                        {...register('lastName', {
+                          required: 'Last name is required',
+                          minLength: {
+                            value: 2,
+                            message: 'Last name must be at least 2 characters',
+                          },
+                        })}
+                        type="text"
+                        className={`mt-1 block w-full border rounded-md px-3 py-2 shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm ${
+                          errors.lastName ? 'border-red-300' : 'border-gray-300'
+                        }`}
+                        placeholder="Enter last name"
+                      />
+                      {errors.lastName && (
+                        <p className="mt-1 text-sm text-red-600">{errors.lastName.message}</p>
+                      )}
+                    </div>
+
+                    {/* Email */}
+                    <div>
+                      <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+                        Email Address
+                      </label>
+                      <input
+                        {...register('email', {
+                          required: 'Email is required',
+                          pattern: {
+                            value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+                            message: 'Please enter a valid email address',
+                          },
+                        })}
+                        type="email"
+                        className={`mt-1 block w-full border rounded-md px-3 py-2 shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm ${
+                          errors.email ? 'border-red-300' : 'border-gray-300'
+                        }`}
+                        placeholder="Enter email address"
+                      />
+                      {errors.email && (
+                        <p className="mt-1 text-sm text-red-600">{errors.email.message}</p>
+                      )}
+                    </div>
+
+                    {/* Role */}
+                    <div>
+                      <label htmlFor="role" className="block text-sm font-medium text-gray-700">
+                        Role
+                      </label>
+                      <select
+                        {...register('role', {
+                          required: 'Role is required',
+                        })}
+                        className={`mt-1 block w-full border rounded-md px-3 py-2 shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm ${
+                          errors.role ? 'border-red-300' : 'border-gray-300'
+                        }`}
+                      >
+                        <option value="user">User</option>
+                        <option value="moderator">Moderator</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                      {errors.role && (
+                        <p className="mt-1 text-sm text-red-600">{errors.role.message}</p>
+                      )}
+                    </div>
+
+                    {/* Active Status */}
+                    <div className="flex items-center">
+                      <input
+                        {...register('isActive')}
+                        type="checkbox"
+                        className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                      />
+                      <label htmlFor="isActive" className="ml-2 block text-sm text-gray-900">
+                        Active User
+                      </label>
+                    </div>
+
+                    {/* Error Messages */}
+                    {Object.keys(errors).length > 0 && (
+                      <div className="rounded-md bg-red-50 p-4">
+                        <div className="flex">
+                          <div className="flex-shrink-0">
+                            <svg
+                              className="h-5 w-5 text-red-400"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.728-.833-2.498 0L4.316 16.5c-.77.833.192 2.5 1.732 2.5z"
+                              />
+                            </svg>
+                          </div>
+                          <div className="ml-3">
+                            <h3 className="text-sm font-medium text-red-800">
+                              Please correct the following errors:
+                            </h3>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </form>
                 )}
               </div>
+            </div>
+          </div>
 
-              {/* Last Name */}
-              <div className="col-span-6 sm:col-span-3">
-                <label htmlFor="lastName" className="block text-sm font-medium text-gray-700">
-                  Last name
-                </label>
-                <input
-                  type="text"
-                  {...register('lastName')}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                />
-                {errors.lastName && (
-                  <p className="mt-1 text-sm text-red-600">{errors.lastName.message}</p>
-                )}
-              </div>
-
-              {/* Email */}
-              <div className="col-span-6">
-                <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                  Email address
-                </label>
-                <input
-                  type="email"
-                  {...register('email')}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                />
-                {errors.email && (
-                  <p className="mt-1 text-sm text-red-600">{errors.email.message}</p>
-                )}
-              </div>
-
-              {/* Role */}
-              <div className="col-span-6">
-                <label htmlFor="role" className="block text-sm font-medium text-gray-700">
-                  Role
-                </label>
-                <select
-                  {...register('role')}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                >
-                  <option value="">Select a role</option>
-                  <option value="user">User</option>
-                  <option value="admin">Admin</option>
-                </select>
-                {errors.role && (
-                  <p className="mt-1 text-sm text-red-600">{errors.role.message}</p>
-                )}
-              </div>
-
-              {/* Password (only for new users) */}
-              {isNew && (
-                <div className="col-span-6">
-                  <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                    Password
-                  </label>
-                  <input
-                    type="password"
-                    {...register('password')}
-                    className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                  />
-                  {errors.password && (
-                    <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>
-                  )}
-                </div>
+          {/* Modal Footer */}
+          <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+            <button
+              type="submit"
+              form="user-form"
+              onClick={handleSubmit(onSubmit)}
+              disabled={isSubmitting || loading}
+              className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSubmitting ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  {isEditMode ? 'Updating...' : 'Creating...'}
+                </>
+              ) : (
+                <>{isEditMode ? 'Update User' : 'Create User'}</>
               )}
-            </div>
-
-            <div className="flex justify-end space-x-3">
-              <button
-                type="button"
-                onClick={() => navigate('/users')}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              >
-                {isNew ? 'Create User' : 'Update User'}
-              </button>
-            </div>
-          </form>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
-}; 
+};
+
+export default UserForm;
